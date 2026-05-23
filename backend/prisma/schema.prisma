@@ -1,0 +1,40 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String?
+  email     String   @unique
+  password  String
+  memories  Memory[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Memory {
+  id        Int          @id @default(autoincrement())
+  userId    Int
+  user      User         @relation(fields: [userId], references: [id])
+  type      String
+  album     String
+  location  String?
+  date      String?
+  files     MemoryFile[]
+  isDeleted Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model MemoryFile {
+  id        Int      @id @default(autoincrement())
+  memoryId  Int
+  memory    Memory   @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+}
