@@ -183,17 +183,17 @@ export const MainLayout: React.FC = () => {
             const f = fileList[i];
             let rawFile = (f.originFileObj || f) as File;
             if (rawFile instanceof File) {
-              const fileTypeLabel = rawFile.type.startsWith('video/') ? 'Video' : rawFile.type.startsWith('audio/') ? 'Audio' : 'Photo';
-              
-              if (rawFile.type.startsWith('video/') && rawFile.size > 90 * 1024 * 1024) {
-                setUploadStatusText(`Optimizing ${fileTypeLabel} ${i + 1}/${fileList.length} (${Math.round(rawFile.size / (1024 * 1024))}MB)...`);
-                rawFile = await compressVideoIfNeeded(rawFile, (statusTxt) => setUploadStatusText(statusTxt));
+              if (rawFile.type.startsWith('video/') && rawFile.size > 80 * 1024 * 1024) {
+                // Phase 1: Fast 5-second video optimization (0% -> 50%)
+                rawFile = await compressVideoIfNeeded(rawFile, (compPercent) => {
+                  setUploadProgress(compPercent);
+                });
               }
 
-              setUploadStatusText(`Uploading ${fileTypeLabel} ${i + 1}/${fileList.length} (0%)...`);
-              const url = await uploadFileToCloudinary(rawFile, sigData, (percent) => {
-                setUploadProgress(percent);
-                setUploadStatusText(`Uploading ${fileTypeLabel} ${i + 1}/${fileList.length} (${percent}%)...`);
+              // Phase 2: Direct 6MB chunked CDN Upload (50% -> 100%)
+              const url = await uploadFileToCloudinary(rawFile, sigData, (cdnPercent) => {
+                const totalPercent = Math.min(99, Math.round(50 + (cdnPercent * 0.5)));
+                setUploadProgress(totalPercent);
               });
               uploadedUrls.push(url);
             }
@@ -527,17 +527,14 @@ export const MainLayout: React.FC = () => {
             </div>
           </div>
 
-          {loading && uploadStatusText && (
-            <div className="mb-4 p-3.5 bg-[#fffaf8] rounded-xl border border-[#ff8e53]/30 text-center font-['Nunito'] shadow-sm">
-              <div className="text-sm font-bold text-[#ff7043] mb-1.5">{uploadStatusText}</div>
-              {uploadProgress !== null && (
-                <Progress 
-                  percent={uploadProgress} 
-                  status="active" 
-                  strokeColor={{ '0%': '#ff8e53', '100%': '#fe6b8b' }} 
-                  className="m-0"
-                />
-              )}
+          {loading && (
+            <div className="mb-4 p-3 bg-[#fffaf8] rounded-xl border border-[#ff8e53]/30 text-center font-['Nunito'] shadow-sm">
+              <Progress 
+                percent={uploadProgress ?? 0} 
+                status="active" 
+                strokeColor={{ '0%': '#ff8e53', '100%': '#fe6b8b' }} 
+                className="m-0"
+              />
             </div>
           )}
 
@@ -546,7 +543,7 @@ export const MainLayout: React.FC = () => {
               Cancel
             </Button>
             <Button htmlType="submit" className="friendship-btn" loading={loading}>
-              {loading ? (uploadStatusText || 'Uploading...') : 'Save Memory'}
+              Save Memory
             </Button>
           </Form.Item>
         </Form>

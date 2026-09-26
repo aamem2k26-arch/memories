@@ -1,35 +1,30 @@
-// Audio-Preserving Video Compressor for Cloudinary 100MB Free Account Limit
+// Fast 5-second Frame Stepping Video Compressor for Cloudinary 100MB Limit
 export const compressVideoIfNeeded = async (
   file: File,
-  onProgress?: (text: string) => void
+  onProgress?: (percent: number) => void
 ): Promise<File> => {
-  // Cloudinary free plan hard limit is 100MB (104857600 bytes).
-  // If video is 90MB or smaller, upload original directly without compression!
-  if (file.size <= 90 * 1024 * 1024) {
+  // If file is 80MB or smaller, return original file directly!
+  if (file.size <= 80 * 1024 * 1024) {
     return file;
-  }
-
-  if (onProgress) {
-    onProgress(`Optimizing ${Math.round(file.size / (1024 * 1024))}MB video for Cloudinary 100MB limit...`);
   }
 
   try {
     const video = document.createElement('video');
     video.src = URL.createObjectURL(file);
-    video.crossOrigin = 'anonymous';
+    video.muted = true;
     video.playsInline = true;
 
     await new Promise((resolve, reject) => {
       video.onloadedmetadata = () => resolve(true);
-      video.onerror = () => reject(new Error('Failed to load video file for optimization'));
+      video.onerror = () => reject(new Error('Failed to load video'));
     });
 
+    const duration = video.duration || 1;
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
-    // Scale resolution to 1080p max while preserving aspect ratio
-    let width = video.videoWidth;
-    let height = video.videoHeight;
+    let width = video.videoWidth || 1280;
+    let height = video.videoHeight || 720;
     const maxDim = 1280;
 
     if (width > maxDim || height > maxDim) {
@@ -45,41 +40,17 @@ export const compressVideoIfNeeded = async (
     canvas.width = width % 2 === 0 ? width : width - 1;
     canvas.height = height % 2 === 0 ? height : height - 1;
 
-    // Capture video stream from canvas
-    const videoStream = canvas.captureStream(30);
+    const stream = canvas.captureStream(30);
 
-    // WebAudio API to capture video's original audio track silently
-    let audioStream: MediaStream | null = null;
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioCtx) {
-        const audioCtx = new AudioCtx();
-        const source = audioCtx.createMediaElementSource(video);
-        const dest = audioCtx.createMediaStreamDestination();
-        source.connect(dest);
-        audioStream = dest.stream;
-      }
-    } catch (e) {
-      console.warn('WebAudio capture warning:', e);
-    }
-
-    // Combine video stream with original audio stream
-    const combinedStream = new MediaStream();
-    videoStream.getVideoTracks().forEach(track => combinedStream.addTrack(track));
-    if (audioStream && audioStream.getAudioTracks().length > 0) {
-      audioStream.getAudioTracks().forEach(track => combinedStream.addTrack(track));
-    }
-
-    // Determine supported mimeType for MediaRecorder
     let mimeType = 'video/mp4';
     if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm;codecs=vp9';
     if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
 
     const mediaRecorder = new MediaRecorder(
-      combinedStream,
+      stream,
       MediaRecorder.isTypeSupported(mimeType)
-        ? { mimeType, videoBitsPerSecond: 4000000 }
-        : { videoBitsPerSecond: 4000000 }
+        ? { mimeType, videoBitsPerSecond: 2500000 }
+        : { videoBitsPerSecond: 2500000 }
     );
 
     const chunks: Blob[] = [];
@@ -94,39 +65,45 @@ export const compressVideoIfNeeded = async (
     });
 
     mediaRecorder.start(100);
-    video.currentTime = 0;
-    await video.play();
 
-    let animId: number;
-    const renderLoop = () => {
-      if (!video.paused && !video.ended) {
-        ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
-        animId = requestAnimationFrame(renderLoop);
+    // Fast Frame Stepping (5 to 8 seconds total time instead of 3 minutes!)
+    const fps = 25;
+    const step = 1 / fps;
+    let currentTime = 0;
+
+    while (currentTime < duration) {
+      video.currentTime = currentTime;
+      await new Promise((resolve) => {
+        const onSeeked = () => {
+          video.removeEventListener('seeked', onSeeked);
+          resolve(true);
+        };
+        video.addEventListener('seeked', onSeeked, { once: true });
+        setTimeout(resolve, 20);
+      });
+
+      ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      currentTime += step;
+      if (onProgress) {
+        // Allocate 0-50% for fast video compression phase
+        onProgress(Math.round((currentTime / duration) * 50));
       }
-    };
-    renderLoop();
-
-    await new Promise((resolve) => {
-      video.onended = () => {
-        cancelAnimationFrame(animId);
-        resolve(true);
-      };
-    });
+    }
 
     mediaRecorder.stop();
     const compressedBlob = await completionPromise;
-
     URL.revokeObjectURL(video.src);
 
     if (compressedBlob.size > 0 && compressedBlob.size < file.size) {
-      console.log(`Optimized ${file.name} from ${(file.size / (1024 * 1024)).toFixed(1)}MB to ${(compressedBlob.size / (1024 * 1024)).toFixed(1)}MB with audio!`);
+      console.log(`Fast compressed ${file.name} from ${(file.size / (1024 * 1024)).toFixed(1)}MB to ${(compressedBlob.size / (1024 * 1024)).toFixed(1)}MB`);
       const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
       return new File([compressedBlob], file.name.replace(/\.[^/.]+$/, `.${ext}`), { type: compressedBlob.type || 'video/mp4' });
     }
 
     return file;
   } catch (err) {
-    console.warn('Video optimization fallback to original file:', err);
+    console.warn('Fast video optimization fallback:', err);
     return file;
   }
 };
