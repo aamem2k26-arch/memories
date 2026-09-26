@@ -1,5 +1,6 @@
 import api from '../api/axios';
 import axios from 'axios';
+import { compressVideoIfNeeded } from '../utils/compressor';
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Outlet, useNavigate } from 'react-router-dom';
@@ -53,30 +54,73 @@ export const MainLayout: React.FC = () => {
     sigData: any,
     onProgress?: (percent: number) => void
   ): Promise<string> => {
-    const formData = new FormData();
-    formData.append('file', fileObj);
-    formData.append('api_key', sigData.apiKey);
-    formData.append('timestamp', sigData.timestamp.toString());
-    formData.append('signature', sigData.signature);
-    formData.append('folder', sigData.folder || 'memories');
-
     const isVideoOrAudio = fileObj.type.startsWith('video/') || fileObj.type.startsWith('audio/');
     const resourceType = isVideoOrAudio ? 'video' : 'image';
+    const fileSize = fileObj.size;
 
-    const response = await axios.post(
-      `https://api.cloudinary.com/v1_1/${sigData.cloudName}/${resourceType}/upload`,
-      formData,
-      {
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total) {
-            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            if (onProgress) onProgress(percent);
-          }
-        },
-        timeout: 300000 // 5 minutes timeout for large video uploads
+    // Use 6MB chunks for videos or large files (> 6MB) to prevent socket timeouts / stalling
+    const chunkSize = 6 * 1024 * 1024; // 6MB chunk
+
+    if (fileSize <= chunkSize) {
+      const formData = new FormData();
+      formData.append('file', fileObj);
+      formData.append('api_key', sigData.apiKey);
+      formData.append('timestamp', sigData.timestamp.toString());
+      formData.append('signature', sigData.signature);
+      formData.append('folder', sigData.folder || 'memories');
+
+      const response = await axios.post(
+        `https://api.cloudinary.com/v1_1/${sigData.cloudName}/${resourceType}/upload`,
+        formData,
+        {
+          onUploadProgress: (progressEvent) => {
+            if (progressEvent.total && onProgress) {
+              const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+              onProgress(percent);
+            }
+          },
+          timeout: 300000 // 5 minutes
+        }
+      );
+      return response.data.secure_url;
+    }
+
+    // Large file / Video: Chunked upload (Uploads 6MB at a time so connection never stalls!)
+    const uniqueUploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    let start = 0;
+    let responseData: any = null;
+
+    while (start < fileSize) {
+      const end = Math.min(start + chunkSize, fileSize);
+      const chunk = fileObj.slice(start, end);
+
+      const formData = new FormData();
+      formData.append('file', chunk, fileObj.name);
+      formData.append('api_key', sigData.apiKey);
+      formData.append('timestamp', sigData.timestamp.toString());
+      formData.append('signature', sigData.signature);
+      formData.append('folder', sigData.folder || 'memories');
+
+      const res = await axios.post(
+        `https://api.cloudinary.com/v1_1/${sigData.cloudName}/${resourceType}/upload`,
+        formData,
+        {
+          headers: {
+            'X-Unique-Upload-Id': uniqueUploadId,
+            'Content-Range': `bytes ${start}-${end - 1}/${fileSize}`
+          },
+          timeout: 300000
+        }
+      );
+
+      start = end;
+      if (onProgress) {
+        onProgress(Math.round((start * 100) / fileSize));
       }
-    );
-    return response.data.secure_url;
+      responseData = res.data;
+    }
+
+    return responseData.secure_url;
   };
 
   const handleAddMemory = async (values: any) => {
@@ -137,9 +181,15 @@ export const MainLayout: React.FC = () => {
         if (sigData) {
           for (let i = 0; i < fileList.length; i++) {
             const f = fileList[i];
-            const rawFile = (f.originFileObj || f) as File;
+            let rawFile = (f.originFileObj || f) as File;
             if (rawFile instanceof File) {
               const fileTypeLabel = rawFile.type.startsWith('video/') ? 'Video' : rawFile.type.startsWith('audio/') ? 'Audio' : 'Photo';
+              
+              if (rawFile.type.startsWith('video/') && rawFile.size > 60 * 1024 * 1024) {
+                setUploadStatusText(`Optimizing ${fileTypeLabel} ${i + 1}/${fileList.length} (${Math.round(rawFile.size / (1024 * 1024))}MB)...`);
+                rawFile = await compressVideoIfNeeded(rawFile, (statusTxt) => setUploadStatusText(statusTxt));
+              }
+
               setUploadStatusText(`Uploading ${fileTypeLabel} ${i + 1}/${fileList.length} (0%)...`);
               const url = await uploadFileToCloudinary(rawFile, sigData, (percent) => {
                 setUploadProgress(percent);
