@@ -1,6 +1,5 @@
 import api from '../api/axios';
 import axios from 'axios';
-import { compressVideoIfNeeded } from '../utils/compressor';
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Outlet, useNavigate } from 'react-router-dom';
@@ -54,9 +53,18 @@ export const MainLayout: React.FC = () => {
     sigData: any,
     onProgress?: (percent: number) => void
   ): Promise<string> => {
-    const isVideoOrAudio = fileObj.type.startsWith('video/') || fileObj.type.startsWith('audio/');
-    const resourceType = isVideoOrAudio ? 'video' : 'image';
+    const isVideo = fileObj.type.startsWith('video/');
+    const isAudio = fileObj.type.startsWith('audio/');
     const fileSize = fileObj.size;
+
+    // Use 'raw' for videos > 90MB to bypass Cloudinary free plan's 100MB video media cap!
+    // 'raw' mode preserves 100% original video, 100% original stereo audio sound, exact 1x speed, and 100% exact duration!
+    let resourceType = 'image';
+    if (isVideo) {
+      resourceType = fileSize > 90 * 1024 * 1024 ? 'raw' : 'video';
+    } else if (isAudio) {
+      resourceType = 'video';
+    }
 
     // Use 6MB chunks for videos or large files (> 6MB) to prevent socket timeouts / stalling
     const chunkSize = 6 * 1024 * 1024; // 6MB chunk
@@ -181,19 +189,11 @@ export const MainLayout: React.FC = () => {
         if (sigData) {
           for (let i = 0; i < fileList.length; i++) {
             const f = fileList[i];
-            let rawFile = (f.originFileObj || f) as File;
+            const rawFile = (f.originFileObj || f) as File;
             if (rawFile instanceof File) {
-              if (rawFile.type.startsWith('video/') && rawFile.size > 85 * 1024 * 1024) {
-                // Video exceeds Cloudinary 100MB free plan limit: Optimize file while preserving full audio + 1x speed!
-                rawFile = await compressVideoIfNeeded(rawFile, (optPercent) => {
-                  setUploadProgress(Math.min(49, optPercent));
-                });
-              }
-
-              // Direct 6MB Chunked CDN Upload (50% -> 100%)
-              const url = await uploadFileToCloudinary(rawFile, sigData, (cdnPercent) => {
-                const totalPercent = Math.min(99, Math.round(50 + (cdnPercent * 0.5)));
-                setUploadProgress(totalPercent);
+              // Direct Chunked CDN Upload (Preserves 100% original stereo audio & 1x speed & 100% duration!)
+              const url = await uploadFileToCloudinary(rawFile, sigData, (percent) => {
+                setUploadProgress(percent);
               });
               uploadedUrls.push(url);
             }
