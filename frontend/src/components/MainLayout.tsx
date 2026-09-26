@@ -1,6 +1,5 @@
 import api from '../api/axios';
 import axios from 'axios';
-import { compressVideoIfNeeded } from '../utils/compressor';
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Outlet, useNavigate } from 'react-router-dom';
@@ -181,15 +180,10 @@ export const MainLayout: React.FC = () => {
         if (sigData) {
           for (let i = 0; i < fileList.length; i++) {
             const f = fileList[i];
-            let rawFile = (f.originFileObj || f) as File;
+            const rawFile = (f.originFileObj || f) as File;
             if (rawFile instanceof File) {
               const fileTypeLabel = rawFile.type.startsWith('video/') ? 'Video' : rawFile.type.startsWith('audio/') ? 'Audio' : 'Photo';
               
-              if (rawFile.type.startsWith('video/') && rawFile.size > 60 * 1024 * 1024) {
-                setUploadStatusText(`Optimizing ${fileTypeLabel} ${i + 1}/${fileList.length} (${Math.round(rawFile.size / (1024 * 1024))}MB)...`);
-                rawFile = await compressVideoIfNeeded(rawFile, (statusTxt) => setUploadStatusText(statusTxt));
-              }
-
               setUploadStatusText(`Uploading ${fileTypeLabel} ${i + 1}/${fileList.length} (0%)...`);
               const url = await uploadFileToCloudinary(rawFile, sigData, (percent) => {
                 setUploadProgress(percent);
