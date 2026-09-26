@@ -1,6 +1,5 @@
 import api from '../api/axios';
 import axios from 'axios';
-import { compressVideoIfNeeded } from '../utils/compressor';
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Outlet, useNavigate } from 'react-router-dom';
@@ -181,19 +180,11 @@ export const MainLayout: React.FC = () => {
         if (sigData) {
           for (let i = 0; i < fileList.length; i++) {
             const f = fileList[i];
-            let rawFile = (f.originFileObj || f) as File;
+            const rawFile = (f.originFileObj || f) as File;
             if (rawFile instanceof File) {
-              if (rawFile.type.startsWith('video/') && rawFile.size > 80 * 1024 * 1024) {
-                // Phase 1: Fast 5-second video optimization (0% -> 50%)
-                rawFile = await compressVideoIfNeeded(rawFile, (compPercent) => {
-                  setUploadProgress(compPercent);
-                });
-              }
-
-              // Phase 2: Direct 6MB chunked CDN Upload (50% -> 100%)
-              const url = await uploadFileToCloudinary(rawFile, sigData, (cdnPercent) => {
-                const totalPercent = Math.min(99, Math.round(50 + (cdnPercent * 0.5)));
-                setUploadProgress(totalPercent);
+              // Direct 6MB Chunked CDN Upload (Preserves 100% original Dolby/Stereo audio & 1x speed!)
+              const url = await uploadFileToCloudinary(rawFile, sigData, (percent) => {
+                setUploadProgress(percent);
               });
               uploadedUrls.push(url);
             }
