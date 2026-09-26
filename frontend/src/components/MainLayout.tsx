@@ -1,4 +1,5 @@
 import api from '../api/axios';
+import axios from 'axios';
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Outlet, useNavigate } from 'react-router-dom';
@@ -54,20 +55,29 @@ export const MainLayout: React.FC = () => {
     });
 
 
+  const uploadFileToCloudinary = async (fileObj: File, sigData: any): Promise<string> => {
+    const formData = new FormData();
+    formData.append('file', fileObj);
+    formData.append('api_key', sigData.apiKey);
+    formData.append('timestamp', sigData.timestamp.toString());
+    formData.append('signature', sigData.signature);
+    formData.append('folder', sigData.folder || 'memories');
+
+    const isVideoOrAudio = fileObj.type.startsWith('video/') || fileObj.type.startsWith('audio/');
+    const resourceType = isVideoOrAudio ? 'video' : 'image';
+
+    const response = await axios.post(
+      `https://api.cloudinary.com/v1_1/${sigData.cloudName}/${resourceType}/upload`,
+      formData
+    );
+    return response.data.secure_url;
+  };
+
   const handleAddMemory = async (values: any) => {
     try {
       setLoading(true);
 
-      // Convert cover file to base64 if present
-      let coverBase64 = '';
-      if (coverFileList.length > 0) {
-        const coverRaw = coverFileList[0].originFileObj || coverFileList[0];
-        if (coverRaw instanceof File) {
-          coverBase64 = await getBase64(coverRaw);
-        }
-      }
-
-      if (fileList.length === 0 && !coverBase64) {
+      if (fileList.length === 0 && coverFileList.length === 0) {
         setUploadError('Please upload files!');
         setLoading(false);
         return;
@@ -76,14 +86,37 @@ export const MainLayout: React.FC = () => {
       const albumName = Array.isArray(values.album) ? values.album[0] : values.album;
       const savedMemories = [];
 
-      // 1. Save cover image memory separately (type: 'cover') if uploaded
-      if (coverBase64) {
+      // 1. Fetch Cloudinary upload signature for direct CDN upload (bypasses Vercel 4.5MB limit!)
+      let sigData: any = null;
+      try {
+        const sigRes = await api.get('/memories/signature');
+        if (sigRes.data.success) {
+          sigData = sigRes.data;
+        }
+      } catch (err) {
+        console.warn('Could not fetch upload signature, falling back to server upload:', err);
+      }
+
+      // 2. Upload Cover Image (if present)
+      let coverUrl = '';
+      if (coverFileList.length > 0) {
+        const coverRaw = (coverFileList[0].originFileObj || coverFileList[0]) as File;
+        if (coverRaw instanceof File) {
+          if (sigData) {
+            coverUrl = await uploadFileToCloudinary(coverRaw, sigData);
+          } else {
+            coverUrl = await getBase64(coverRaw);
+          }
+        }
+      }
+
+      if (coverUrl) {
         const coverPayload = {
           type: 'cover',
           album: albumName,
           location: '',
           date: null,
-          files: [coverBase64]
+          files: [coverUrl]
         };
         const coverResponse = await api.post('/memories', coverPayload);
         if (coverResponse.data.success) {
@@ -91,33 +124,58 @@ export const MainLayout: React.FC = () => {
         }
       }
 
-      // 2. Save the actual memory (if there are general files) using FormData to avoid base64 memory crashes
+      // 3. Upload Main Media Files (Images / Videos / Audio)
       if (fileList.length > 0) {
-        const formData = new FormData();
-        formData.append('type', values.type || 'image');
-        formData.append('location', values.location || '');
-        formData.append('date', values.date ? values.date.format('YYYY-MM-DD') : '');
-        formData.append('album', albumName || '');
+        const uploadedUrls: string[] = [];
 
-        for (const f of fileList) {
-          const rawFile = f.originFileObj || f;
-          if (rawFile instanceof File) {
-            formData.append('files', rawFile);
+        if (sigData) {
+          for (const f of fileList) {
+            const rawFile = (f.originFileObj || f) as File;
+            if (rawFile instanceof File) {
+              const url = await uploadFileToCloudinary(rawFile, sigData);
+              uploadedUrls.push(url);
+            }
           }
         }
 
-        const response = await api.post('/memories', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        });
-        if (response.data.success) {
-          savedMemories.push(response.data.memory);
+        if (uploadedUrls.length > 0) {
+          // Direct Cloudinary URLs payload
+          const payload = {
+            type: values.type || 'image',
+            album: albumName || '',
+            location: values.location || '',
+            date: values.date ? values.date.format('YYYY-MM-DD') : '',
+            files: uploadedUrls
+          };
+          const response = await api.post('/memories', payload);
+          if (response.data.success) {
+            savedMemories.push(response.data.memory);
+          }
+        } else {
+          // Fallback multipart upload
+          const formData = new FormData();
+          formData.append('type', values.type || 'image');
+          formData.append('location', values.location || '');
+          formData.append('date', values.date ? values.date.format('YYYY-MM-DD') : '');
+          formData.append('album', albumName || '');
+
+          for (const f of fileList) {
+            const rawFile = (f.originFileObj || f) as File;
+            if (rawFile instanceof File) {
+              formData.append('files', rawFile);
+            }
+          }
+
+          const response = await api.post('/memories', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          if (response.data.success) {
+            savedMemories.push(response.data.memory);
+          }
         }
       }
 
       if (savedMemories.length > 0) {
-        // Prepend all saved memories to the state
         setMemories(prev => [...savedMemories, ...prev]);
         setIsModalVisible(false);
         form.resetFields();
@@ -126,45 +184,10 @@ export const MainLayout: React.FC = () => {
         setUploadError(null);
         message.success({ content: 'Memory saved forever!', icon: <HeartFilled style={{ color: '#fe6b8b' }} /> });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      let errorDetail = "";
-      if (error && typeof error === 'object') {
-        const anyErr = error as any;
-        
-        // Handle native Event or ProgressEvent (in case it still occurs)
-        if (typeof Event !== 'undefined' && error instanceof Event) {
-          const target = error.target;
-          if (typeof FileReader !== 'undefined' && target instanceof FileReader) {
-            errorDetail = `File read error: ${target.error?.message || target.error?.name || 'Failed to read file'}`;
-          } else {
-            errorDetail = `Browser Event: ${error.type}`;
-          }
-        } 
-        // Handle Axios Response or Server error message
-        else {
-          const data = anyErr.response?.data;
-          if (data && typeof data === 'object' && data.message) {
-            errorDetail = data.message;
-          } else if (data && typeof data === 'string' && !data.trim().startsWith('<')) {
-            errorDetail = data.trim();
-          } else if (anyErr.message) {
-            errorDetail = anyErr.message;
-          } else if (anyErr.name) {
-            errorDetail = `${anyErr.name}: ${anyErr.message || ''}`;
-          } else {
-            const str = JSON.stringify(anyErr);
-            errorDetail = (str === '{}' || str === '{"isTrusted":true}') ? String(error) : str;
-          }
-        }
-      } else if (error) {
-        errorDetail = String(error);
-      }
-      
-      if (errorDetail.length > 200) {
-        errorDetail = errorDetail.substring(0, 200) + '...';
-      }
-      message.error(`Failed to save memory: ${errorDetail || 'Unknown error'}`);
+      let errorDetail = error?.response?.data?.message || error?.message || String(error);
+      message.error(`Failed to save memory: ${errorDetail}`);
     } finally {
       setLoading(false);
     }
