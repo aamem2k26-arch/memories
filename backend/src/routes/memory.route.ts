@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { verifyToken } from '../middleware/auth.middleware';
-import { createMemory, getMemories, getTrash, softDeleteMemory, restoreMemory, hardDeleteMemory, deleteMemoryFile } from '../controllers/memory.controller';
+import { createMemory, getMemories, getTrash, softDeleteMemory, restoreMemory, hardDeleteMemory, deleteMemoryFile, getUploadSignature } from '../controllers/memory.controller';
 
 const router = express.Router();
 const upload = multer({
@@ -13,6 +13,7 @@ const upload = multer({
 
 router.use(verifyToken);
 
+router.get('/signature', getUploadSignature);
 router.post('/', upload.array('files'), createMemory);
 router.get('/', getMemories);
 router.get('/trash', getTrash);

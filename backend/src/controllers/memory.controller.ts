@@ -15,6 +15,33 @@ function parseCloudinaryUrl(url: string): { publicId: string; resourceType: stri
     }
 }
 
+export const getUploadSignature = async (req: Request, res: Response): Promise<any> => {
+    try {
+        const userId = (req as any).user?.id;
+        if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+        const timestamp = Math.round(new Date().getTime() / 1000);
+        const folder = 'memories';
+
+        const signature = cloudinary.utils.api_sign_request(
+            { folder, timestamp },
+            process.env.CLOUDINARY_API_SECRET!
+        );
+
+        res.json({
+            success: true,
+            timestamp,
+            signature,
+            apiKey: process.env.CLOUDINARY_API_KEY,
+            cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+            folder
+        });
+    } catch (error) {
+        console.error('Error generating signature:', error);
+        res.status(500).json({ success: false, message: 'Failed to generate signature' });
+    }
+};
+
 export const createMemory = async (req: Request, res: Response): Promise<any> => {
     try {
         const userId = (req as any).user?.id;
@@ -48,16 +75,20 @@ export const createMemory = async (req: Request, res: Response): Promise<any> =>
 
         const createdFiles = [];
         for (const fileData of fileList) {
-            // Upload base64 directly to Cloudinary (folder: memories, resource_type: auto handles image/video/audio automatically)
-            const uploadResult = await cloudinary.uploader.upload(fileData, {
-                folder: 'memories',
-                resource_type: 'auto'
-            });
+            let finalUrl = fileData;
+            // If it's base64 or not an HTTP(S) URL, upload to Cloudinary server-side
+            if (!fileData.startsWith('http://') && !fileData.startsWith('https://')) {
+                const uploadResult = await cloudinary.uploader.upload(fileData, {
+                    folder: 'memories',
+                    resource_type: 'auto'
+                });
+                finalUrl = uploadResult.secure_url;
+            }
 
             const createdFile = await prisma.memoryFile.create({
                 data: {
                     memoryId: memory.id,
-                    data: uploadResult.secure_url
+                    data: finalUrl
                 }
             });
             createdFiles.push(createdFile);

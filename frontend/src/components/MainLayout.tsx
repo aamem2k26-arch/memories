@@ -45,16 +45,7 @@ export const MainLayout: React.FC = () => {
     fetchMemories();
   }, [message]);
 
-  const getBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => {
-        const fileError = reader.error || new Error('File read failed (could be out of memory or restricted file access)');
-        reject(fileError);
-      };
-    });
+
 
 
   const uploadFileToCloudinary = async (
@@ -119,13 +110,9 @@ export const MainLayout: React.FC = () => {
       let coverUrl = '';
       if (coverFileList.length > 0) {
         const coverRaw = (coverFileList[0].originFileObj || coverFileList[0]) as File;
-        if (coverRaw instanceof File) {
-          if (sigData) {
-            setUploadStatusText('Uploading album cover...');
-            coverUrl = await uploadFileToCloudinary(coverRaw, sigData, (p) => setUploadProgress(p));
-          } else {
-            coverUrl = await getBase64(coverRaw);
-          }
+        if (coverRaw instanceof File && sigData) {
+          setUploadStatusText('Uploading album cover...');
+          coverUrl = await uploadFileToCloudinary(coverRaw, sigData, (p) => setUploadProgress(p));
         }
       }
 
