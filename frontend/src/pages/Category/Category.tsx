@@ -1,5 +1,6 @@
 import api from '../../api/axios';
 import { Loader } from '../../components/Loader';
+import { downloadFile } from '../../utils/download';
 import React, { useState, useEffect } from 'react';
 import { Button, Typography, Tabs, Card, Input, Modal, App } from 'antd';
 import { useParams, useNavigate, useOutletContext, useLocation } from 'react-router-dom';
@@ -212,55 +213,7 @@ export const Category: React.FC = () => {
   };
 
   const handleDownload = (file: any) => {
-    if (!file || !file.data) return;
-    try {
-      const parts = file.data.split(',');
-      if (parts.length < 2) return;
-      
-      const mimeMatch = parts[0].match(/:(.*?);/);
-      const mime = mimeMatch ? mimeMatch[1] : '';
-      const b64Data = parts[1];
-      
-      const byteCharacters = atob(b64Data);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: mime });
-      
-      let extension = 'bin';
-      if (mime) {
-        if (mime.includes('jpeg') || mime.includes('jpg')) extension = 'jpg';
-        else if (mime.includes('png')) extension = 'png';
-        else if (mime.includes('gif')) extension = 'gif';
-        else if (mime.includes('mp4')) extension = 'mp4';
-        else if (mime.includes('quicktime')) extension = 'mov';
-        else if (mime.includes('mp3') || mime.includes('mpeg')) extension = 'mp3';
-        else if (mime.includes('wav')) extension = 'wav';
-        else {
-          const mimeParts = mime.split('/');
-          if (mimeParts[1]) extension = mimeParts[1];
-        }
-      }
-      
-      const blobUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = `memory-${file.id || Date.now()}.${extension}`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
-    } catch (e) {
-      console.error("Failed to download file:", e);
-      const link = document.createElement('a');
-      link.href = file.data;
-      link.download = `memory-${file.id || Date.now()}`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
+    downloadFile(file);
   };
 
   useEffect(() => {
