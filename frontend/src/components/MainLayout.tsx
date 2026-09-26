@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Outlet, useNavigate } from 'react-router-dom';
 import type { UploadFile } from 'antd/es/upload/interface';
-import { Layout, Button, Modal, Form, Input, DatePicker, Select, Radio, Upload, App, Drawer } from 'antd';
+import { Layout, Button, Modal, Form, Input, DatePicker, Select, Radio, Upload, App, Drawer, Progress } from 'antd';
 import { LogoutOutlined, HeartFilled, PlusOutlined, UploadOutlined, MenuOutlined, DeleteOutlined, CloseOutlined } from '@ant-design/icons';
 
 const { Header, Content } = Layout;
@@ -23,6 +23,8 @@ export const MainLayout: React.FC = () => {
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [coverFileList, setCoverFileList] = useState<UploadFile[]>([]);
   const [_uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadStatusText, setUploadStatusText] = useState<string>('');
   const mediaType = Form.useWatch('type', form);
 
   const albums = Array.from(new Set(memories.filter(m => !m.isDeleted && m.type !== 'cover').map(m => m.album))).filter(Boolean);
@@ -55,7 +57,11 @@ export const MainLayout: React.FC = () => {
     });
 
 
-  const uploadFileToCloudinary = async (fileObj: File, sigData: any): Promise<string> => {
+  const uploadFileToCloudinary = async (
+    fileObj: File, 
+    sigData: any,
+    onProgress?: (percent: number) => void
+  ): Promise<string> => {
     const formData = new FormData();
     formData.append('file', fileObj);
     formData.append('api_key', sigData.apiKey);
@@ -68,7 +74,16 @@ export const MainLayout: React.FC = () => {
 
     const response = await axios.post(
       `https://api.cloudinary.com/v1_1/${sigData.cloudName}/${resourceType}/upload`,
-      formData
+      formData,
+      {
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            if (onProgress) onProgress(percent);
+          }
+        },
+        timeout: 300000 // 5 minutes timeout for large video uploads
+      }
     );
     return response.data.secure_url;
   };
@@ -76,10 +91,12 @@ export const MainLayout: React.FC = () => {
   const handleAddMemory = async (values: any) => {
     try {
       setLoading(true);
+      setUploadProgress(0);
 
       if (fileList.length === 0 && coverFileList.length === 0) {
         setUploadError('Please upload files!');
         setLoading(false);
+        setUploadProgress(null);
         return;
       }
 
@@ -89,6 +106,7 @@ export const MainLayout: React.FC = () => {
       // 1. Fetch Cloudinary upload signature for direct CDN upload (bypasses Vercel 4.5MB limit!)
       let sigData: any = null;
       try {
+        setUploadStatusText('Preparing secure upload...');
         const sigRes = await api.get('/memories/signature');
         if (sigRes.data.success) {
           sigData = sigRes.data;
@@ -103,7 +121,8 @@ export const MainLayout: React.FC = () => {
         const coverRaw = (coverFileList[0].originFileObj || coverFileList[0]) as File;
         if (coverRaw instanceof File) {
           if (sigData) {
-            coverUrl = await uploadFileToCloudinary(coverRaw, sigData);
+            setUploadStatusText('Uploading album cover...');
+            coverUrl = await uploadFileToCloudinary(coverRaw, sigData, (p) => setUploadProgress(p));
           } else {
             coverUrl = await getBase64(coverRaw);
           }
@@ -129,16 +148,23 @@ export const MainLayout: React.FC = () => {
         const uploadedUrls: string[] = [];
 
         if (sigData) {
-          for (const f of fileList) {
+          for (let i = 0; i < fileList.length; i++) {
+            const f = fileList[i];
             const rawFile = (f.originFileObj || f) as File;
             if (rawFile instanceof File) {
-              const url = await uploadFileToCloudinary(rawFile, sigData);
+              const fileTypeLabel = rawFile.type.startsWith('video/') ? 'Video' : rawFile.type.startsWith('audio/') ? 'Audio' : 'Photo';
+              setUploadStatusText(`Uploading ${fileTypeLabel} ${i + 1}/${fileList.length} (0%)...`);
+              const url = await uploadFileToCloudinary(rawFile, sigData, (percent) => {
+                setUploadProgress(percent);
+                setUploadStatusText(`Uploading ${fileTypeLabel} ${i + 1}/${fileList.length} (${percent}%)...`);
+              });
               uploadedUrls.push(url);
             }
           }
         }
 
         if (uploadedUrls.length > 0) {
+          setUploadStatusText('Saving memory to database...');
           // Direct Cloudinary URLs payload
           const payload = {
             type: values.type || 'image',
@@ -152,6 +178,7 @@ export const MainLayout: React.FC = () => {
             savedMemories.push(response.data.memory);
           }
         } else {
+          setUploadStatusText('Uploading files via server...');
           // Fallback multipart upload
           const formData = new FormData();
           formData.append('type', values.type || 'image');
@@ -186,10 +213,21 @@ export const MainLayout: React.FC = () => {
       }
     } catch (error: any) {
       console.error(error);
-      let errorDetail = error?.response?.data?.message || error?.message || String(error);
+      let errorDetail = '';
+      if (error?.response?.data?.error?.message) {
+        errorDetail = `Cloudinary: ${error.response.data.error.message}`;
+      } else if (error?.response?.data?.message) {
+        errorDetail = error.response.data.message;
+      } else if (error?.message) {
+        errorDetail = error.message;
+      } else {
+        errorDetail = String(error);
+      }
       message.error(`Failed to save memory: ${errorDetail}`);
     } finally {
       setLoading(false);
+      setUploadProgress(null);
+      setUploadStatusText('');
     }
   };
 
@@ -452,12 +490,26 @@ export const MainLayout: React.FC = () => {
             </div>
           </div>
 
-          <Form.Item className="mt-auto pt-6 mb-0 text-right">
-            <Button onClick={() => setIsModalVisible(false)} className="mr-3">
+          {loading && uploadStatusText && (
+            <div className="mb-4 p-3.5 bg-[#fffaf8] rounded-xl border border-[#ff8e53]/30 text-center font-['Nunito'] shadow-sm">
+              <div className="text-sm font-bold text-[#ff7043] mb-1.5">{uploadStatusText}</div>
+              {uploadProgress !== null && (
+                <Progress 
+                  percent={uploadProgress} 
+                  status="active" 
+                  strokeColor={{ '0%': '#ff8e53', '100%': '#fe6b8b' }} 
+                  className="m-0"
+                />
+              )}
+            </div>
+          )}
+
+          <Form.Item className="mt-auto pt-4 mb-0 text-right">
+            <Button onClick={() => setIsModalVisible(false)} className="mr-3" disabled={loading}>
               Cancel
             </Button>
             <Button htmlType="submit" className="friendship-btn" loading={loading}>
-              Save Memory
+              {loading ? (uploadStatusText || 'Uploading...') : 'Save Memory'}
             </Button>
           </Form.Item>
         </Form>
