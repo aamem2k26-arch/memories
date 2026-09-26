@@ -33,6 +33,23 @@ export const compressVideoIfNeeded = async (
           return;
         }
 
+        // Ensure 1x normal playback rate so duration and audio lip-sync are 100% preserved
+        video.playbackRate = 1.0;
+
+        // WebAudio fallback if captureStream did not automatically include audio tracks
+        let audioCtx: AudioContext | null = null;
+        if (stream.getAudioTracks().length === 0) {
+          try {
+            audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const source = audioCtx.createMediaElementSource(video);
+            const dest = audioCtx.createMediaStreamDestination();
+            source.connect(dest);
+            dest.stream.getAudioTracks().forEach(track => stream!.addTrack(track));
+          } catch (audioErr) {
+            console.warn('WebAudio audio capture fallback:', audioErr);
+          }
+        }
+
         let mimeType = 'video/mp4';
         if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm;codecs=vp8,opus';
         if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
@@ -50,6 +67,9 @@ export const compressVideoIfNeeded = async (
         };
 
         mediaRecorder.onstop = () => {
+          if (audioCtx) {
+            audioCtx.close().catch(() => {});
+          }
           URL.revokeObjectURL(video.src);
           const compressedBlob = new Blob(chunks, { type: mimeType || 'video/mp4' });
           if (compressedBlob.size > 0 && compressedBlob.size < file.size) {
@@ -60,9 +80,6 @@ export const compressVideoIfNeeded = async (
             resolve(file);
           }
         };
-
-        // 3x playback speed fast-encodes a 1:52 min video in under 30 seconds!
-        video.playbackRate = 3.0;
 
         mediaRecorder.start(100);
 
@@ -84,7 +101,9 @@ export const compressVideoIfNeeded = async (
         video.currentTime = 0;
         video.play().catch((err) => {
           console.warn('Play error during capture:', err);
-          mediaRecorder.stop();
+          if (mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+          }
           resolve(file);
         });
       };
